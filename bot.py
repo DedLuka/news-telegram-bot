@@ -192,8 +192,21 @@ def format_news_entry(article, category_name, index, source_type):
     # Форматируем время
     published_time = published.strftime("%d.%m.%Y в %H:%M")
     
-    # Определяем приоритет источника
-    is_russian = source in RSS_SOURCES or 'ria' in url.lower() or 'tass' in url.lower()
+    # Определяем приоритет источника (ИСПРАВЛЕНО)
+    source_str = str(source)
+    url_lower = url.lower()
+    
+    is_russian = False
+    # Проверяем, есть ли источник в RSS_SOURCES (по имени)
+    if source_str in RSS_SOURCES:
+        is_russian = True
+    # Проверяем по URL российских источников
+    elif 'ria' in url_lower or 'tass' in url_lower or 'rt.com' in url_lower or 'kommersant' in url_lower or 'mk.ru' in url_lower or 'vesti26' in url_lower:
+        is_russian = True
+    # Если это GNews, проверяем URL источника
+    elif source_type == "GNews" and any(r in url_lower for r in ['ria', 'tass', 'rt.com', 'kommersant', 'mk.ru', 'vesti26']):
+        is_russian = True
+    
     source_priority = "🇷🇺 Официальный/Российский источник" if is_russian else "🌍 Иностранный источник"
     
     # Получаем контент
@@ -232,7 +245,6 @@ def generate_analysis(all_articles, stats):
     analysis = f"""
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                         АНАЛИТИЧЕСКАЯ СВОДКА                                 ║
-║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 **Статистика обработки:**
@@ -326,7 +338,7 @@ def main():
             for idx, article in enumerate(articles, 1):
                 # Проверяем, не дублируется ли с RSS
                 title_lower = article.get('title', '').lower()
-                is_duplicate = any(title_lower in existing for existing in [n[:100] for n in all_news])
+                is_duplicate = any(title_lower in existing[:100].lower() for existing in all_news)
                 
                 if not is_duplicate:
                     news_entry = format_news_entry(article, category_name, idx, "GNews")
@@ -344,9 +356,8 @@ def main():
     
     report = f"""
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║         ЕЖЕДНЕВНЫЙ АНАЛИТИЧЕСКИЙ ДОКЛАД ДЛЯ КОМАНДИРА                        ║
+║         ЕЖЕДНЕВНЫЙ АНАЛИТИЧЕСКИЙ ДОКЛАД ДЛЯ ВЫСШЕГО ВОЕННОГО РУКОВОДСТВА     ║
 ║                        {today} | {current_time} МСК                          ║
-║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 """
