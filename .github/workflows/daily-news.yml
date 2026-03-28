@@ -22,16 +22,17 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libxml2-dev libxslt-dev python3-dev
-
+    
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
-        pip install requests feedparser newspaper3k
+        pip install requests feedparser
+        pip install lxml lxml_html_clean
+        pip install newspaper3k
     
     - name: Run news bot
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
       run: |
         python bot.py
