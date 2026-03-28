@@ -4,6 +4,7 @@ import feedparser
 from datetime import datetime, timedelta
 import time
 from collections import defaultdict
+import re
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
@@ -24,22 +25,22 @@ RSS_SOURCES = {
     "Российская газета": "https://rg.ru/xml/index.xml"
 }
 
-# Категории с ключевыми словами (новый порядок)
+# Категории с ключевыми словами
 CATEGORIES = {
     "МИР": {
-        "keywords": ["мир", "международный", "foreign", "world", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "переговоры", "глобальный", "международные отношения", "оон", "совбез"],
+        "keywords": ["мир", "международный", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "переговоры", "глобальный", "оон", "совбез"],
         "priority": 1
     },
     "РОССИЯ": {
-        "keywords": ["россия", "путин", "медведев", "мишустин", "кремль", "госдума", "совет федерации", "правительство", "москва", "российский", "безопасность", "оборона", "фсб", "разведка", "указ", "закон", "национальная безопасность"],
+        "keywords": ["россия", "путин", "медведев", "мишустин", "кремль", "госдума", "совет федерации", "правительство", "москва", "российский", "безопасность", "оборона", "фсб", "разведка", "указ", "закон"],
         "priority": 2
     },
     "СВО": {
-        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "герасимов", "вс рф", "спецоперация", "бригада", "дивизия", "наступление", "оборона", "танк", "артиллерия", "авиация", "удар", "обстрел", "потери", "уничтожен", "донецк", "луганск"],
+        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "герасимов", "вс рф", "спецоперация", "бригада", "дивизия", "наступление", "оборона", "танк", "артиллерия", "авиация", "удар", "обстрел", "потери", "донецк", "луганск"],
         "priority": 3
     },
     "СТАВРОПОЛЬЕ": {
-        "keywords": ["ставрополь", "ставрополье", "ставропольский", "кавминводы", "пятигорск", "кисловодск", "ессентуки", "железноводск", "невинномысск", "михайловск", "гтрк ставрополье", "безопасность", "терроризм", "чп", "мобилизация", "военкомат", "казачество", "край", "скиф", "динамо ставрополь", "ставропольский край"],
+        "keywords": ["ставрополь", "ставрополье", "ставропольский", "кавминводы", "пятигорск", "кисловодск", "ессентуки", "железноводск", "невинномысск", "михайловск", "гтрк ставрополье", "безопасность", "терроризм", "чп", "мобилизация", "военкомат", "казачество", "ставропольский край"],
         "priority": 4
     }
 }
@@ -47,20 +48,34 @@ CATEGORIES = {
 # Порядок категорий для отчета
 CATEGORY_ORDER = ['МИР', 'РОССИЯ', 'СВО', 'СТАВРОПОЛЬЕ']
 
+def is_russian(text):
+    """Проверяет, содержит ли текст русские буквы"""
+    if not text:
+        return False
+    # Проверяем наличие кириллицы
+    return bool(re.search('[а-яА-ЯёЁ]', text))
+
 def fetch_rss_news(source_name, url):
-    """Получает новости из RSS"""
+    """Получает новости из RSS, фильтрует только русскоязычные"""
     try:
         feed = feedparser.parse(url)
         articles = []
-        for entry in feed.entries[:10]:
+        for entry in feed.entries[:15]:  # Берем больше для фильтрации
+            title = entry.get('title', '')
+            description = entry.get('summary', '')
+            
+            # Проверяем, что новость на русском языке
+            if not is_russian(title) and not is_russian(description):
+                continue
+                
             published = datetime.now()
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                 published = datetime(*entry.published_parsed[:6])
             articles.append({
-                'title': entry.get('title', ''),
+                'title': title,
                 'url': entry.get('link', ''),
                 'source': source_name,
-                'description': entry.get('summary', ''),
+                'description': description,
                 'published': published
             })
         return articles
@@ -225,7 +240,7 @@ def generate_analysis(category_news, all_news_with_priority):
     return analysis
 
 def main():
-    print("Запуск бота...")
+    print("Запуск бота (только русскоязычные новости)...")
     
     if not BOT_TOKEN or not CHAT_ID:
         print("Ошибка: нет токенов")
@@ -238,6 +253,7 @@ def main():
     for source_name, rss_url in RSS_SOURCES.items():
         print(f"  {source_name}...")
         articles = fetch_rss_news(source_name, rss_url)
+        print(f"    Найдено русскоязычных: {len(articles)}")
         for article in articles:
             cat = get_category(article.get('title', ''), article.get('description', ''))
             priority = get_priority_score(article.get('title', ''), article.get('description', ''))
@@ -249,7 +265,7 @@ def main():
             })
         time.sleep(0.3)
     
-    print(f"\nВсего собрано новостей: {len(all_raw_news)}")
+    print(f"\nВсего русскоязычных новостей: {len(all_raw_news)}")
     
     # Сортировка по приоритету
     all_raw_news.sort(key=lambda x: x['priority'], reverse=True)
@@ -272,7 +288,7 @@ def main():
                     if len(category_news[cat]) >= 5:
                         break
     
-    # Формируем отчет (новый порядок: МИР, РОССИЯ, СВО, СТАВРОПОЛЬЕ)
+    # Формируем отчет
     report = f"ЕЖЕДНЕВНЫЙ ДОКЛАД\nДата: {datetime.now().strftime('%d.%m.%Y')}\n\n"
     
     all_news_with_priority = []
@@ -287,7 +303,6 @@ def main():
                     if idx < len(category_news[cat][:7]):
                         report += "\n***\n\n"
                     
-                    # Сохраняем для аналитики
                     all_news_with_priority.append({
                         'title': article.get('title', ''),
                         'priority': get_priority_score(article.get('title', ''), article.get('description', ''))
