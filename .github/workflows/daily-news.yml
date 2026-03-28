@@ -26,8 +26,7 @@ jobs:
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
-        pip install requests beautifulsoup4 lxml lxml_html_clean
-        pip install newspaper3k
+        pip install requests feedparser newspaper3k beautifulsoup4 lxml lxml_html_clean
     
     - name: Run news bot
       env:
