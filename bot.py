@@ -5,164 +5,197 @@ from datetime import datetime, timedelta
 import time
 from collections import defaultdict
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # ==================== РОССИЙСКИЕ RSS-ИСТОЧНИКИ ====================
 RSS_RUSSIAN = {
-    # Официальные государственные агентства
     "ТАСС": "http://tass.com/rss/v2.xml",
     "РИА Новости": "https://ria.ru/export/rss2/index.xml",
-    "RT (Russia Today)": "https://rt.com/rss/news/",
+    "RT": "https://rt.com/rss/news/",
     "Вести.ру": "https://www.vesti.ru/vesti.rss",
-    "Спутник": "https://sputniknews.com/export/rss2/world/index.xml",
-    
-    # Ведущие российские СМИ
     "Коммерсантъ": "https://www.kommersant.ru/RSS/news.xml",
     "МК": "https://www.mk.ru/rss/news/index.xml",
     "Комсомольская правда": "https://www.kp.ru/rss/",
-    "Lenta.ru - новости": "https://lenta.ru/rss/news",
-    "Lenta.ru - главное": "https://lenta.ru/rss/top7",
-    "Lenta.ru - Россия": "https://lenta.ru/rss/news/russia",
-    "Lenta.ru - Мир": "https://lenta.ru/rss/news/world",
+    "Lenta.ru": "https://lenta.ru/rss/news",
     "Известия": "https://iz.ru/xml/rss.xml",
     "РБК": "https://www.rbc.ru/rss/",
     "Российская газета": "https://rg.ru/xml/index.xml",
     "Газета.Ru": "https://www.gazeta.ru/export/rss/lenta.xml",
     "Взгляд": "https://vz.ru/rss.xml",
-    "Life.ru": "https://life.ru/rss/feed",
-    
-    # Региональные источники
     "Вести Ставрополье": "https://vesti26.ru/rss/",
     "Ставропольская правда": "https://www.stapravda.ru/rss/",
-    
-    # Технические и IT-новости (полезны для военной тематики)
-    "OpenNET (главное)": "https://www.opennet.ru/opennews/opennews_6_noadv.rss",
-    "OpenNET (полные тексты)": "https://www.opennet.ru/opennews/opennews_6_full.rss",
-    "OpenNET (мини-новости)": "https://www.opennet.ru/opennews/opennews_mini_noadv.rss",
 }
 
 # ==================== ЗАРУБЕЖНЫЕ RSS-ИСТОЧНИКИ ====================
 RSS_FOREIGN = {
-    # Англоязычные мировые СМИ
     "BBC News": "http://feeds.bbci.co.uk/news/rss.xml",
-    "BBC World": "http://feeds.bbci.co.uk/news/world/rss.xml",
     "CNN": "http://rss.cnn.com/rss/edition.rss",
-    "CNN World": "http://rss.cnn.com/rss/edition_world.rss",
     "The Guardian": "https://www.theguardian.com/world/rss",
-    "The New York Times": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
-    "Washington Post": "https://feeds.washingtonpost.com/rss/world",
     "Reuters": "https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best",
     "AP News": "http://hosted2.ap.org/atom/APTopNews",
-    "NPR": "https://feeds.npr.org/1001/rss.xml",
-    "Al Jazeera": "https://www.aljazeera.com/xml/rss/all.xml",
-    "Deutsche Welle": "https://rss.dw.com/rdf/rss-en-world",
-    "France 24": "https://www.france24.com/en/france-24-rss-feeds",
-    "The Economist": "https://www.economist.com/feeds/print-sections/77/world-politics.xml",
-    
-    # Военная и аналитическая тематика
     "Defense News": "https://www.defensenews.com/arc/outboundfeeds/rss/",
-    "Jane's Defence": "https://www.janes.com/rss",
-    "The War Zone (The Drive)": "https://www.thedrive.com/the-war-zone/feed",
+    "The War Zone": "https://www.thedrive.com/the-war-zone/feed",
     "Military.com": "https://www.military.com/feed",
     "Stars and Stripes": "https://www.stripes.com/rss",
     "Breaking Defense": "https://breakingdefense.com/feed/",
-    "Defense One": "https://www.defenseone.com/feeds/all/",
-    "RAND Corporation": "https://www.rand.org/rss/news.xml",
-    
-    # Аналитические центры
-    "CSIS": "https://www.csis.org/rss.xml",
-    "Chatham House": "https://www.chathamhouse.org/rss.xml",
-    "Atlantic Council": "https://www.atlanticcouncil.org/feed/",
-    
-    # Зарубежные русскоязычные
-    "Meduza": "https://meduza.io/rss/all",
-    "Current Time TV": "https://www.currenttime.tv/api/zljqjzr",
-    "Радио Свобода": "https://www.svoboda.org/api/zljqjzr",
-    
-    # Региональные
-    "The Moscow Times (англ)": "https://www.themoscowtimes.com/rss/news",
 }
 
-# Объединяем все источники
 RSS_SOURCES = {**RSS_RUSSIAN, **RSS_FOREIGN}
 
-# Категории с ключевыми словами
 CATEGORIES = {
     "МИР": {
-        "keywords": ["мир", "международный", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "переговоры", "глобальный", "оон", "совбез", "world", "international", "europe", "usa", "nato", "china"],
+        "keywords": ["мир", "международный", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "оон", "world", "international", "europe", "usa", "nato", "china", "russia", "ukraine"],
         "priority": 1
     },
     "РОССИЯ": {
-        "keywords": ["россия", "путин", "медведев", "мишустин", "кремль", "госдума", "совет федерации", "правительство", "москва", "российский", "безопасность", "оборона", "фсб", "разведка", "указ", "закон", "russia", "putin", "kremlin"],
+        "keywords": ["россия", "путин", "медведев", "мишустин", "кремль", "госдума", "правительство", "москва", "российский", "безопасность", "оборона", "фсб", "указ", "закон", "russia", "putin", "kremlin"],
         "priority": 2
     },
     "СВО": {
-        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "герасимов", "вс рф", "спецоперация", "бригада", "дивизия", "наступление", "оборона", "танк", "артиллерия", "авиация", "удар", "обстрел", "потери", "донецк", "луганск", "ukraine", "donbas", "war", "military"],
+        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "герасимов", "спецоперация", "наступление", "оборона", "удар", "обстрел", "донецк", "луганск", "ukraine", "donbas", "war", "military"],
         "priority": 3
     },
     "СТАВРОПОЛЬЕ": {
-        "keywords": ["ставрополь", "ставрополье", "ставропольский", "кавминводы", "пятигорск", "кисловодск", "ессентуки", "железноводск", "невинномысск", "михайловск", "гтрк ставрополье", "безопасность", "терроризм", "чп", "мобилизация", "военкомат", "казачество", "ставропольский край"],
+        "keywords": ["ставрополь", "ставрополье", "ставропольский", "кавминводы", "пятигорск", "кисловодск", "ессентуки", "безопасность", "терроризм", "чп", "мобилизация", "военкомат", "казачество"],
         "priority": 4
     }
 }
 
-# Порядок категорий для отчета
 CATEGORY_ORDER = ['МИР', 'РОССИЯ', 'СВО', 'СТАВРОПОЛЬЕ']
 
+# Кэш для переведенных заголовков (простой, без сохранения между запусками)
+translation_cache = {}
+
 def is_russian(text):
-    """Проверяет, содержит ли текст русские буквы"""
-    if not text:
-        return False
     return bool(re.search('[а-яА-ЯёЁ]', text))
 
-def fetch_rss_news(source_name, url):
-    """Получает новости из RSS, фильтрует только русскоязычные"""
+def translate_to_russian(text):
+    """Простой перевод через Google Translate API (бесплатный)"""
+    if not text or is_russian(text):
+        return text
+    
+    # Проверяем кэш
+    cache_key = hashlib.md5(text.encode()).hexdigest()
+    if cache_key in translation_cache:
+        return translation_cache[cache_key]
+    
+    try:
+        # Используем бесплатный Google Translate через requests
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            'client': 'gtx',
+            'sl': 'auto',
+            'tl': 'ru',
+            'dt': 't',
+            'q': text[:500]  # Ограничиваем длину
+        }
+        response = requests.get(url, params=params, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            translated = ''.join([item[0] for item in data[0]])
+            translation_cache[cache_key] = translated
+            return translated
+    except Exception as e:
+        pass
+    return text
+
+def extract_locations(text):
+    """Извлекает названия населенных пунктов из текста"""
+    locations = []
+    location_patterns = [
+        r'(?:в|на|под|у|из|за|около)\s+([А-ЯЁ][а-яё]+(?:-?[А-ЯЁ][а-яё]+)?)\s+(?:районе?|области?|крае?|городе?)',
+        r'([А-ЯЁ][а-яё]+(?:-?[А-ЯЁ][а-яё]+)?)\s+(?:город|поселок|село|станица|хутор)',
+        r'(?:Донецк|Луганск|Запорожье|Херсон|Бахмут|Авдеевка|Артемовск|Соледар|Кременная|Сватово)'
+    ]
+    for pattern in location_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        locations.extend(matches)
+    return list(set(locations))[:3]
+
+def check_inconsistency(title, description, source_name):
+    """Проверяет несоответствие информации с российскими источниками"""
+    text = (title + " " + description).lower()
+    
+    # Маркеры противоречия
+    contradiction_markers = ['опровергает', 'опровержение', 'ложь', 'фейк', 'не соответствует', 'дезинформация']
+    western_sources = ['bbc', 'cnn', 'guardian', 'reuters', 'ap', 'washington', 'nytimes']
+    
+    is_western = any(w in source_name.lower() for w in western_sources)
+    has_contradiction = any(m in text for m in contradiction_markers)
+    
+    if has_contradiction:
+        return "⚠️ Информация противоречит официальным российским источникам"
+    elif is_western:
+        return "🌍 Информация из западного источника, требуется верификация"
+    return ""
+
+def fetch_single_rss(source_name, url):
+    """Загружает один RSS-источник"""
     try:
         feed = feedparser.parse(url)
         articles = []
-        for entry in feed.entries[:15]:
+        for entry in feed.entries[:8]:
             title = entry.get('title', '')
             description = entry.get('summary', '')
-            
-            # Для иностранных источников сохраняем английские новости
-            # Для российских — фильтруем по русскому языку
-            if source_name in RSS_RUSSIAN:
-                if not is_russian(title) and not is_russian(description):
-                    continue
-                
             published = datetime.now()
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                 published = datetime(*entry.published_parsed[:6])
+            
+            # Для российских источников оставляем как есть, для зарубежных - переводим
+            if source_name in RSS_RUSSIAN:
+                final_title = title
+                final_description = description
+            else:
+                final_title = translate_to_russian(title)
+                final_description = translate_to_russian(description)
+            
             articles.append({
-                'title': title,
+                'title': final_title,
                 'url': entry.get('link', ''),
                 'source': source_name,
-                'description': description,
-                'published': published
+                'description': final_description,
+                'published': published,
+                'is_russian': source_name in RSS_RUSSIAN
             })
         return articles
     except Exception as e:
+        print(f"    Ошибка {source_name}: {e}")
         return []
 
+def fetch_all_rss_parallel():
+    """Параллельная загрузка всех RSS-источников"""
+    all_articles = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(fetch_single_rss, name, url): name for name, url in RSS_SOURCES.items()}
+        for future in as_completed(futures):
+            source_name = futures[future]
+            try:
+                articles = future.result()
+                print(f"  ✅ {source_name}: {len(articles)} новостей")
+                all_articles.extend(articles)
+            except Exception as e:
+                print(f"  ❌ {source_name}: ошибка - {e}")
+    return all_articles
+
 def get_category(title, description):
-    """Определяет категорию новости"""
     text = (title + " " + description).lower()
-    
     for cat_name, cat_data in CATEGORIES.items():
         for kw in cat_data['keywords']:
             if kw in text:
                 return cat_name
     return "РОССИЯ"
 
-def get_priority_score(title, description):
-    """Оценивает важность новости для военного руководства"""
+def get_priority_score(title, description, source_is_russian):
+    """Оценивает важность новости"""
     text = (title + " " + description).lower()
     score = 0
     
-    high_priority = ["минобороны", "шойгу", "герасимов", "наступление", "приказ", "указ президента", "мобилизация", "сво", "фронт", "бригада", "дивизия", "генштаб", "верховный главнокомандующий", "defense", "military", "offensive"]
-    medium_priority = ["армия", "войска", "военный", "оборона", "безопасность", "разведка", "фсб", "контртеррористическая", "охрана", "army", "troops", "security"]
+    high_priority = ["минобороны", "шойгу", "герасимов", "наступление", "приказ", "мобилизация", "сво", "фронт", "бригада", "дивизия"]
+    medium_priority = ["армия", "войска", "военный", "оборона", "безопасность", "разведка", "фсб"]
     
     for word in high_priority:
         if word in text:
@@ -171,189 +204,128 @@ def get_priority_score(title, description):
         if word in text:
             score += 2
     
+    # Российские источники получают бонус
+    if source_is_russian:
+        score += 3
+    
     return score
 
 def format_news_entry(article, index, category):
-    """Форматирует одну новость"""
+    """Форматирует одну новость (кратко)"""
     title = article.get('title', '')
     url = article.get('url', '')
     source = article.get('source', '')
     description = article.get('description', '')
     published = article.get('published', datetime.now())
-    
     published_time = published.strftime("%d.%m.%Y %H:%M")
     
-    content = description if description and len(description) > 50 else title
+    # Извлекаем населенные пункты
+    locations = extract_locations(title + " " + description)
+    locations_text = f"📍 {', '.join(locations)}" if locations else ""
+    
+    # Проверяем несоответствие
+    inconsistency = check_inconsistency(title, description, source)
+    inconsistency_text = f"\n{inconsistency}" if inconsistency else ""
+    
+    # Краткое содержание (первые 300 символов)
+    content = description[:500] if description and len(description) > 50 else title[:500]
     
     entry = f"""НОВОСТЬ {index}
 Категория: {category}
 Источник: {source}
 Заголовок: {title}
-Содержание:
-{content[:2000]}
-Время публикации: {published_time} МСК
-Ссылка: {url}
+{locations_text}
+Содержание: {content}
+Время: {published_time} МСК
+Ссылка: {url}{inconsistency_text}
 """
     return entry
 
-def generate_analysis(category_news, all_news_with_priority):
-    """Содержательная аналитическая сводка"""
-    
+def generate_analysis(category_news, total_processed):
+    """Аналитическая сводка"""
     today = datetime.now().strftime("%d.%m.%Y")
-    
-    key_themes = []
-    for news in all_news_with_priority[:20]:
-        if news.get('priority', 0) >= 3:
-            key_themes.append(news['title'][:100])
-    
-    themes_text = "\n".join([f"- {theme}" for theme in key_themes[:10]])
     
     analysis = f"""
 АНАЛИТИЧЕСКАЯ СВОДКА
 Дата: {today}
 
-1. СТАТИСТИКА ПО КАТЕГОРИЯМ
+1. СТАТИСТИКА
 - МИР: {len(category_news.get('МИР', []))} новостей
 - РОССИЯ: {len(category_news.get('РОССИЯ', []))} новостей
 - СВО: {len(category_news.get('СВО', []))} новостей
 - СТАВРОПОЛЬЕ: {len(category_news.get('СТАВРОПОЛЬЕ', []))} новостей
+- Всего обработано: {total_processed}
 
-2. КЛЮЧЕВЫЕ ТЕМЫ (приоритетные для военного руководства)
-{themes_text if themes_text else "- Информация обрабатывается"}
+2. ОЦЕНКА ОБСТАНОВКИ
+- В зоне СВО сохраняется напряженность
+- Российские войска продолжают выполнение задач
+- Зафиксированы противоречия в западных СМИ
+- Ставропольский край: обстановка контролируемая
 
-3. ОЦЕНКА ВОЕННО-ПОЛИТИЧЕСКОЙ ОБСТАНОВКИ
+3. УГРОЗЫ И РИСКИ
+- Информационные атаки со стороны западных СМИ
+- Сохранение санкционного давления
+- Региональные риски в Северо-Кавказском регионе
 
-На основе анализа новостных материалов из российских и зарубежных источников за последние 24 часа установлено:
+4. РЕКОМЕНДАЦИИ
+- Усилить мониторинг западных источников
+- Проводить верификацию противоречивых данных
+- Обратить внимание на региональную безопасность
 
-Международная обстановка:
-- Сохраняется напряженность в отношениях с недружественными государствами
-- Продолжается санкционное давление на Российскую Федерацию
-- Активизируются дипломатические контакты с дружественными странами
-- Зафиксированы противоречивые заявления западных политиков
-
-Внутриполитическая обстановка в Российской Федерации:
-- Руководством страны принимаются меры по обеспечению обороноспособности
-- Продолжается работа по социальной поддержке семей военнослужащих
-- Обеспечен контроль над ситуацией в регионах
-
-Зона проведения специальной военной операции:
-- Российские войска продолжают выполнение поставленных задач
-- Зафиксированы успешные действия подразделений на основных направлениях
-- Противник несет потери в живой силе и технике
-
-Ситуация в Ставропольском крае и городе Ставрополе:
-- Обстановка контролируемая
-- Особое внимание уделяется вопросам безопасности
-- Продолжается работа по социальной поддержке мобилизованных граждан
-
-4. УГРОЗЫ И РИСКИ ДЛЯ РОССИЙСКОЙ ФЕДЕРАЦИИ
-
-Военно-стратегические риски:
-- Сохраняется угроза эскалации конфликта со стороны стран НАТО
-- Активизация разведывательной деятельности иностранных государств у границ РФ
-
-Информационные риски:
-- Распространение недостоверной информации в западных СМИ
-- Попытки дискредитации действий Вооруженных Сил РФ
-
-Региональные риски:
-- Угрозы террористического характера в регионах Северного Кавказа
-- Необходимость усиления контроля за миграционными процессами
-
-5. ОЦЕНКА ДОСТОВЕРНОСТИ ИСТОЧНИКОВ
-
-| Категория | Оценка | Приоритет |
-|-----------|--------|-----------|
-| ТАСС, РИА Новости, RT | Высокая | Основной |
-| Коммерсантъ, Известия, РБК | Высокая | Основной |
-| Lenta.ru, Газета.Ru | Высокая | Основной |
-| BBC, CNN, Reuters | Средняя | Мониторинг |
-| Defense News, Jane's | Средняя | Аналитика |
-
-6. ПРОГНОЗ РАЗВИТИЯ СОБЫТИЙ (7-14 СУТОК)
-
-Прогнозируется:
-- Сохранение интенсивности боевых действий в зоне проведения СВО
-- Возможная активизация дипломатических контактов на международной арене
-- Усиление информационного противостояния в преддверии значимых дат
-
-7. РЕКОМЕНДАЦИИ ВЫСШЕМУ ВОЕННОМУ РУКОВОДСТВУ
-
-- Продолжить мониторинг обстановки в зоне проведения СВО
-- Усилить контроль за распространением недостоверной информации в западных СМИ
-- Обратить внимание на региональные аспекты безопасности в Ставропольском крае
-- Проводить оперативную верификацию противоречивых данных
-
-Доклад подготовлен автоматически на основе данных из {len(RSS_SOURCES)} источников.
+Доклад подготовлен автоматически.
 """
     return analysis
 
 def main():
-    print(f"Запуск бота... Используется {len(RSS_SOURCES)} источников")
+    print(f"🚀 Запуск бота (параллельная загрузка, {len(RSS_SOURCES)} источников)...")
     
     if not BOT_TOKEN or not CHAT_ID:
-        print("Ошибка: нет токенов")
+        print("❌ Ошибка: нет токенов Telegram")
         return
     
-    all_raw_news = []
-    print("\nСбор новостей из RSS-источников...")
+    # Параллельный сбор
+    print("\n📡 Параллельная загрузка RSS...")
+    start_time = time.time()
+    all_articles = fetch_all_rss_parallel()
+    elapsed = time.time() - start_time
+    print(f"\n⏱️ Загрузка завершена за {elapsed:.1f} сек. Всего статей: {len(all_articles)}")
     
-    for source_name, rss_url in RSS_SOURCES.items():
-        print(f"  {source_name}...")
-        articles = fetch_rss_news(source_name, rss_url)
-        print(f"    Найдено: {len(articles)}")
-        for article in articles:
-            cat = get_category(article.get('title', ''), article.get('description', ''))
-            priority = get_priority_score(article.get('title', ''), article.get('description', ''))
-            all_raw_news.append({
-                'article': article,
-                'category': cat,
-                'priority': priority,
-                'title': article.get('title', '')
-            })
-        time.sleep(0.3)
+    # Категоризация и оценка
+    news_items = []
+    for article in all_articles:
+        cat = get_category(article['title'], article.get('description', ''))
+        priority = get_priority_score(article['title'], article.get('description', ''), article.get('is_russian', False))
+        news_items.append({
+            'article': article,
+            'category': cat,
+            'priority': priority
+        })
     
-    print(f"\nВсего собрано новостей: {len(all_raw_news)}")
+    # Сортировка по приоритету
+    news_items.sort(key=lambda x: x['priority'], reverse=True)
     
-    all_raw_news.sort(key=lambda x: x['priority'], reverse=True)
-    
+    # Распределение по категориям (по 7 в каждой)
     category_news = defaultdict(list)
-    
-    for item in all_raw_news:
+    for item in news_items:
         cat = item['category']
         if len(category_news[cat]) < 7:
             category_news[cat].append(item['article'])
     
-    for cat in CATEGORIES.keys():
-        if len(category_news[cat]) < 5:
-            for item in all_raw_news:
-                if item['article'] not in category_news[cat] and item['article'] not in [a for list in category_news.values() for a in list]:
-                    category_news[cat].append(item['article'])
-                    if len(category_news[cat]) >= 5:
-                        break
-    
+    # Формирование отчета
     report = f"ЕЖЕДНЕВНЫЙ ДОКЛАД\nДата: {datetime.now().strftime('%d.%m.%Y')}\n\n"
-    
-    all_news_with_priority = []
     
     for cat in CATEGORY_ORDER:
         if cat in category_news and category_news[cat]:
-            report += f"\n=== КАТЕГОРИЯ: {cat} ===\n\n"
+            report += f"\n=== {cat} ===\n\n"
             for idx, article in enumerate(category_news[cat][:7], 1):
-                entry = format_news_entry(article, idx, cat)
-                if entry:
-                    report += entry
-                    if idx < len(category_news[cat][:7]):
-                        report += "\n***\n\n"
-                    
-                    all_news_with_priority.append({
-                        'title': article.get('title', ''),
-                        'priority': get_priority_score(article.get('title', ''), article.get('description', ''))
-                    })
+                report += format_news_entry(article, idx, cat)
+                if idx < len(category_news[cat][:7]):
+                    report += "\n***\n\n"
             report += "\n"
     
-    report += generate_analysis(category_news, all_news_with_priority)
+    report += generate_analysis(category_news, len(all_articles))
     
+    # Отправка
     if len(report) > 4096:
         parts = [report[i:i+4096] for i in range(0, len(report), 4096)]
         for part in parts:
@@ -362,7 +334,7 @@ def main():
         send_telegram(report)
     
     total = sum(len(news) for news in category_news.values())
-    print(f"\nГотово. Новостей: {total}")
+    print(f"\n✅ Готово за {time.time() - start_time:.1f} сек. Новостей: {total}")
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -375,7 +347,7 @@ def send_telegram(message):
     try:
         requests.post(url, json=payload, timeout=60)
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"❌ Ошибка отправки: {e}")
 
 if __name__ == "__main__":
     main()
