@@ -21,6 +21,10 @@ jobs:
     - name: Install requests
       run: |
         pip install requests
+        
+    - name: Install dependencies
+      run: |
+        pip install requests newspaper3k lxml_parser
     
     - name: Run news bot
       env:
