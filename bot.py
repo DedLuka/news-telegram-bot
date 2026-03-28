@@ -8,37 +8,28 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 
-# Читаем секреты из окружения (ОБЯЗАТЕЛЬНО В НАЧАЛЕ)
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-# Тестовая функция (после определения переменных)
 def test_telegram():
-    """Проверяет соединение с Telegram"""
     if not BOT_TOKEN or not CHAT_ID:
         print("❌ Токены не заданы!")
         return False
-    
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         'chat_id': CHAT_ID,
         'text': "🔧 Бот запущен и работает",
-        'parse_mode': 'Markdown'
+        'disable_web_page_preview': True
     }
     try:
         r = requests.post(url, json=payload, timeout=10)
         print(f"📡 Тест отправки: статус {r.status_code}")
-        if r.status_code == 200:
-            print("✅ Telegram работает!")
-            return True
-        else:
-            print(f"❌ Ошибка: {r.text[:200]}")
-            return False
+        return r.status_code == 200
     except Exception as e:
         print(f"❌ Ошибка теста: {e}")
         return False
 
-# ==================== РОССИЙСКИЕ RSS-ИСТОЧНИКИ ====================
+# Российские RSS-источники
 RSS_RUSSIAN = {
     "ТАСС": "http://tass.com/rss/v2.xml",
     "РИА Новости": "https://ria.ru/export/rss2/index.xml",
@@ -57,7 +48,7 @@ RSS_RUSSIAN = {
     "Ставропольская правда": "https://www.stapravda.ru/rss/",
 }
 
-# ==================== ЗАРУБЕЖНЫЕ RSS-ИСТОЧНИКИ ====================
+# Зарубежные RSS-источники
 RSS_FOREIGN = {
     "BBC News": "http://feeds.bbci.co.uk/news/rss.xml",
     "CNN": "http://rss.cnn.com/rss/edition.rss",
@@ -75,7 +66,7 @@ RSS_SOURCES = {**RSS_RUSSIAN, **RSS_FOREIGN}
 
 CATEGORIES = {
     "МИР": {
-        "keywords": ["мир", "международный", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "оон", "world", "international", "europe", "usa", "nato", "china"],
+        "keywords": ["мир", "международный", "иран", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "оон", "world", "international", "europe", "usa", "nato", "china"],
         "priority": 1
     },
     "РОССИЯ": {
@@ -83,11 +74,11 @@ CATEGORIES = {
         "priority": 2
     },
     "СВО": {
-        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "герасимов", "спецоперация", "наступление", "удар", "обстрел", "донецк", "луганск", "ukraine", "war", "military"],
+        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "золотов", "росгвардия", "ВНГ РФ", "герасимов", "спецоперация", "наступление", "удар", "обстрел", "донецк", "луганск", "ukraine", "war", "military"],
         "priority": 3
     },
     "СТАВРОПОЛЬЕ": {
-        "keywords": ["ставрополь", "ставрополье", "ставропольский", "кавминводы", "пятигорск", "кисловодск", "ессентуки", "безопасность", "терроризм", "чп", "мобилизация", "военкомат"],
+        "keywords": ["ставрополь", "ставрополье", "ставропольский", "кавминводы", "пятигорск", "кисловодск", "ессентуки", "безопасность", "росгвардия", "ВНГ РФ", "минирование", "терроризм", "чп", "мобилизация", "военкомат"],
         "priority": 4
     }
 }
@@ -188,8 +179,11 @@ def fetch_all_rss_parallel():
             source_name = futures[future]
             try:
                 articles = future.result()
-                print(f"  ✅ {source_name}: {len(articles)}")
-                all_articles.extend(articles)
+                if articles:
+                    print(f"  ✅ {source_name}: {len(articles)}")
+                    all_articles.extend(articles)
+                else:
+                    print(f"  ⚠️ {source_name}: 0")
             except Exception as e:
                 print(f"  ❌ {source_name}: ошибка")
     return all_articles
@@ -217,6 +211,13 @@ def get_priority_score(title, description, source_is_russian):
         score += 3
     return score
 
+def escape_markdown(text):
+    """Экранирует специальные символы Markdown"""
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in special_chars:
+        text = text.replace(char, '\\' + char)
+    return text
+
 def format_news_entry(article, index, category):
     title = article.get('title', '')
     url = article.get('url', '')
@@ -225,18 +226,21 @@ def format_news_entry(article, index, category):
     published = article.get('published', datetime.now())
     published_time = published.strftime("%d.%m.%Y %H:%M")
     
+    # Экранируем специальные символы
+    title = escape_markdown(title)
+    source = escape_markdown(source)
+    description = escape_markdown(description[:500] if description else title[:500])
+    
     locations = extract_locations(title + " " + description)
     locations_text = f"📍 {', '.join(locations)}" if locations else ""
     inconsistency = check_inconsistency(title, description, source)
-    
-    content = (description[:500] if description and len(description) > 50 else title[:500])
     
     entry = f"""НОВОСТЬ {index}
 Категория: {category}
 Источник: {source}
 Заголовок: {title}
 {locations_text}
-Содержание: {content}
+Содержание: {description}
 Время: {published_time} МСК
 Ссылка: {url}{inconsistency}
 """
@@ -265,8 +269,8 @@ def generate_analysis(category_news, total_processed):
 - Сохранение санкционного давления
 
 4. РЕКОМЕНДАЦИИ
-- Усилить мониторинг западных источников
-- Проводить верификацию противоречивых данных
+- Продолжить мониторинг западных источников
+- Проводить верификацию противоречивых данных, получить информацию из дополнительных источников
 """
     return analysis
 
@@ -278,7 +282,6 @@ def send_telegram(message):
     payload = {
         'chat_id': CHAT_ID,
         'text': message,
-        'parse_mode': 'Markdown',
         'disable_web_page_preview': True
     }
     try:
@@ -287,7 +290,7 @@ def send_telegram(message):
             print("   ✅ Отправлено")
             return True
         else:
-            print(f"   ❌ Ошибка: {r.text[:100]}")
+            print(f"   ❌ Ошибка: {r.text[:200]}")
             return False
     except Exception as e:
         print(f"   ❌ Ошибка: {e}")
@@ -296,18 +299,15 @@ def send_telegram(message):
 def main():
     print("🚀 Запуск бота...")
     
-    # Проверка токенов
     if not BOT_TOKEN or not CHAT_ID:
-        print("❌ Ошибка: TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не заданы в секретах")
+        print("❌ Ошибка: TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не заданы")
         return
     
-    # Тест Telegram
     print("\n📡 Проверка Telegram...")
     if not test_telegram():
-        print("❌ Не удалось подключиться к Telegram. Проверьте токен и Chat ID")
+        print("❌ Не удалось подключиться к Telegram")
         return
     
-    # Параллельная загрузка RSS
     print(f"\n📡 Параллельная загрузка {len(RSS_SOURCES)} источников...")
     start_time = time.time()
     all_articles = fetch_all_rss_parallel()
@@ -318,7 +318,6 @@ def main():
         send_telegram("⚠️ Нет новостей для обработки")
         return
     
-    # Категоризация
     news_items = []
     for article in all_articles:
         cat = get_category(article['title'], article.get('description', ''))
@@ -327,14 +326,12 @@ def main():
     
     news_items.sort(key=lambda x: x['priority'], reverse=True)
     
-    # Распределение по категориям
     category_news = defaultdict(list)
     for item in news_items:
         cat = item['category']
         if len(category_news[cat]) < 7:
             category_news[cat].append(item['article'])
     
-    # Формирование отчета
     report = f"ЕЖЕДНЕВНЫЙ ДОКЛАД\nДата: {datetime.now().strftime('%d.%m.%Y')}\n\n"
     
     for cat in CATEGORY_ORDER:
@@ -348,7 +345,6 @@ def main():
     
     report += generate_analysis(category_news, len(all_articles))
     
-    # Отправка
     print("\n📤 Отправка отчета...")
     if len(report) > 4096:
         parts = [report[i:i+4096] for i in range(0, len(report), 4096)]
