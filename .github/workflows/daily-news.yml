@@ -2,7 +2,7 @@ name: Daily News Report
 
 on:
   schedule:
-    - cron: '0 3 * * *'  # 9:00 MSK
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -18,17 +18,15 @@ jobs:
       with:
         python-version: '3.10'
     
-    - name: Install requests
+    - name: Install system dependencies
       run: |
-        pip install requests
-        
-    - name: Install dependencies
+        sudo apt-get update
+        sudo apt-get install -y libxml2-dev libxslt-dev python3-dev
+    
+    - name: Install Python dependencies
       run: |
-        pip install requests newspaper3k lxml_parser
-
-    - name: Install dependencies
-      run: |
-        pip install requests newspaper3k lxml_parser beautifulsoup4
+        pip install --upgrade pip
+        pip install requests newspaper3k beautifulsoup4 lxml
     
     - name: Run news bot
       env:
