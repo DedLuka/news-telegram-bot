@@ -2,7 +2,7 @@ name: Daily News Report
 
 on:
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -26,7 +26,8 @@ jobs:
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
-        pip install requests newspaper3k beautifulsoup4 lxml
+        pip install requests beautifulsoup4 lxml lxml_html_clean
+        pip install newspaper3k
     
     - name: Run news bot
       env:
