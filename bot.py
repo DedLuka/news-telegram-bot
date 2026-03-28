@@ -7,6 +7,7 @@ from collections import defaultdict
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
+import html
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
@@ -28,6 +29,31 @@ def test_telegram():
     except Exception as e:
         print(f"❌ Ошибка теста: {e}")
         return False
+
+def clean_html(text):
+    """Удаляет HTML-теги и восстанавливает нормальный текст"""
+    if not text:
+        return ""
+    
+    # Декодируем HTML-сущности (&quot;, &amp;, &lt; и т.д.)
+    text = html.unescape(text)
+    
+    # Удаляем все HTML-теги
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # Удаляем экранированные символы (\. и т.д.)
+    text = re.sub(r'\\([\.\*\+\?\[\]\(\)\{\}\|\\])', r'\1', text)
+    
+    # Заменяем множественные пробелы и переносы
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Удаляем ссылки в формате [текст](url)
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    
+    # Удаляем лишние пробелы в начале и конце
+    text = text.strip()
+    
+    return text
 
 # Российские RSS-источники
 RSS_RUSSIAN = {
@@ -66,7 +92,7 @@ RSS_SOURCES = {**RSS_RUSSIAN, **RSS_FOREIGN}
 
 CATEGORIES = {
     "МИР": {
-        "keywords": ["мир", "международный", "иран", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "оон", "world", "international", "europe", "usa", "nato", "china"],
+        "keywords": ["мир", "международный", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "оон", "world", "international", "europe", "usa", "nato", "china"],
         "priority": 1
     },
     "РОССИЯ": {
@@ -74,11 +100,11 @@ CATEGORIES = {
         "priority": 2
     },
     "СВО": {
-        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "золотов", "росгвардия", "ВНГ РФ", "герасимов", "спецоперация", "наступление", "удар", "обстрел", "донецк", "луганск", "ukraine", "war", "military"],
+        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "герасимов", "спецоперация", "наступление", "удар", "обстрел", "донецк", "луганск", "ukraine", "war", "military"],
         "priority": 3
     },
     "СТАВРОПОЛЬЕ": {
-        "keywords": ["ставрополь", "ставрополье", "ставропольский", "кавминводы", "пятигорск", "кисловодск", "ессентуки", "безопасность", "росгвардия", "ВНГ РФ", "минирование", "терроризм", "чп", "мобилизация", "военкомат"],
+        "keywords": ["ставрополь", "ставрополье", "ставропольский", "кавминводы", "пятигорск", "кисловодск", "ессентуки", "безопасность", "терроризм", "чп", "мобилизация", "военкомат"],
         "priority": 4
     }
 }
@@ -148,6 +174,11 @@ def fetch_single_rss(source_name, url):
         for entry in feed.entries[:8]:
             title = entry.get('title', '')
             description = entry.get('summary', '')
+            
+            # Очищаем от HTML-тегов
+            title = clean_html(title)
+            description = clean_html(description)
+            
             published = datetime.now()
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                 published = datetime(*entry.published_parsed[:6])
@@ -211,13 +242,6 @@ def get_priority_score(title, description, source_is_russian):
         score += 3
     return score
 
-def escape_markdown(text):
-    """Экранирует специальные символы Markdown"""
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for char in special_chars:
-        text = text.replace(char, '\\' + char)
-    return text
-
 def format_news_entry(article, index, category):
     title = article.get('title', '')
     url = article.get('url', '')
@@ -226,10 +250,10 @@ def format_news_entry(article, index, category):
     published = article.get('published', datetime.now())
     published_time = published.strftime("%d.%m.%Y %H:%M")
     
-    # Экранируем специальные символы
-    title = escape_markdown(title)
-    source = escape_markdown(source)
-    description = escape_markdown(description[:500] if description else title[:500])
+    # Очищаем еще раз на всякий случай
+    title = clean_html(title)
+    source = clean_html(source)
+    description = clean_html(description[:500] if description else title[:500])
     
     locations = extract_locations(title + " " + description)
     locations_text = f"📍 {', '.join(locations)}" if locations else ""
@@ -269,8 +293,8 @@ def generate_analysis(category_news, total_processed):
 - Сохранение санкционного давления
 
 4. РЕКОМЕНДАЦИИ
-- Продолжить мониторинг западных источников
-- Проводить верификацию противоречивых данных, получить информацию из дополнительных источников
+- Усилить мониторинг западных источников
+- Проводить верификацию противоречивых данных
 """
     return analysis
 
