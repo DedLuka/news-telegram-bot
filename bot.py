@@ -4,30 +4,36 @@ import feedparser
 from datetime import datetime, timedelta
 from newspaper import Article
 import time
+from urllib.parse import urlparse
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
-GNEWS_API_KEY = os.environ.get('GNEWS_API_KEY')
 
+# Только российские RSS-источники
 RSS_SOURCES = {
-    "ТАСС": {"url": "http://tass.com/rss/v2.xml"},
-    "РИА Новости": {"url": "https://ria.ru/export/rss2/index.xml"},
-    "RT": {"url": "https://rt.com/rss/news/"},
-    "Коммерсантъ": {"url": "https://www.kommersant.ru/RSS/news.xml"},
-    "МК": {"url": "https://www.mk.ru/rss/news/index.xml"},
-    "Вести Ставрополье": {"url": "https://vesti26.ru/rss/"}
+    "ТАСС": "http://tass.com/rss/v2.xml",
+    "РИА Новости": "https://ria.ru/export/rss2/index.xml",
+    "RT": "https://rt.com/rss/news/",
+    "Коммерсантъ": "https://www.kommersant.ru/RSS/news.xml",
+    "МК": "https://www.mk.ru/rss/news/index.xml",
+    "Комсомольская правда": "https://www.kp.ru/rss/",
+    "Lenta.ru": "https://lenta.ru/rss/",
+    "Вести.ру": "https://www.vesti.ru/vesti.rss",
+    "Вести Ставрополье": "https://vesti26.ru/rss/"
 }
 
-CATEGORIES = {
-    "МИР": "world OR international",
-    "РОССИЯ": "Russia OR российская федерация",
-    "СВО": "специальная военная операция OR Донбасс",
-    "СТАВРОПОЛЬЕ": "Ставропольский край"
+# Категории для маркировки новостей
+CATEGORY_KEYWORDS = {
+    "МИР": ["мир", "международный", "foreign", "world", "европа", "сша", "нато", "китай"],
+    "РОССИЯ": ["россия", "russia", "путин", "медведев", "мишустин", "кремль", "госдума"],
+    "СВО": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация"],
+    "СТАВРОПОЛЬЕ": ["ставрополь", "ставрополье", "ставропольский", "кавминводы", "пятигорск"]
 }
 
-def fetch_rss_news(source_name, source_config):
+def fetch_rss_news(source_name, url):
+    """Получает новости из RSS-ленты"""
     try:
-        feed = feedparser.parse(source_config["url"])
+        feed = feedparser.parse(url)
         articles = []
         for entry in feed.entries[:5]:
             published = datetime.now()
@@ -44,34 +50,17 @@ def fetch_rss_news(source_name, source_config):
     except Exception as e:
         return []
 
-def get_news_from_gnews(query):
-    url = "https://gnews.io/api/v4/search"
-    params = {
-        'q': query,
-        'lang': 'ru',
-        'max': 3,
-        'apikey': GNEWS_API_KEY
-    }
-    try:
-        response = requests.get(url, params=params, timeout=30)
-        if response.status_code != 200:
-            return []
-        data = response.json()
-        articles = data.get('articles', [])
-        for a in articles:
-            if 'publishedAt' in a:
-                try:
-                    pub_utc = datetime.fromisoformat(a['publishedAt'].replace('Z', '+00:00'))
-                    a['published'] = pub_utc + timedelta(hours=3)
-                except:
-                    a['published'] = datetime.now()
-            else:
-                a['published'] = datetime.now()
-        return articles[:3]
-    except Exception as e:
-        return []
+def get_category(title, description):
+    """Определяет категорию по заголовку и описанию"""
+    text = (title + " " + description).lower()
+    for cat, keywords in CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                return cat
+    return "РОССИЯ"
 
 def get_full_text(url):
+    """Парсит полный текст статьи, возвращает None если недоступен"""
     try:
         article = Article(url, language='ru')
         article.download()
@@ -81,10 +70,11 @@ def get_full_text(url):
         if len(text.split()) >= 50:
             return text
         return None
-    except Exception as e:
+    except Exception:
         return None
 
-def format_news_entry(article, category_name):
+def format_news_entry(article, index):
+    """Форматирует одну новость (только текст, без украшений)"""
     title = article.get('title', '')
     url = article.get('url', '')
     source = article.get('source', '')
@@ -94,92 +84,93 @@ def format_news_entry(article, category_name):
     if not full_text:
         return None
     
+    category = get_category(title, article.get('description', ''))
     published_time = published.strftime("%d.%m.%Y %H:%M")
     
-    entry = f"""Категория: {category_name}
+    entry = f"""Новость {index}
+Категория: {category}
+Источник: {source}
 Заголовок: {title}
 Содержание:
 {full_text[:2000]}
-Источник: {source}
-Время: {published_time} МСК
+Время публикации: {published_time} МСК
 Ссылка: {url}
+
 """
     return entry
 
-def generate_analysis(stats):
+def generate_analysis(total_news, categories_count):
+    """Генерирует аналитическую сводку"""
     analysis = f"""
 АНАЛИТИЧЕСКАЯ СВОДКА
+Всего новостей: {total_news}
 
-Статистика:
-- Всего новостей: {stats['total']}
-- Из RSS: {stats['rss']}
-- Из GNews: {stats['gnews']}
+Распределение по категориям:
+- МИР: {categories_count.get('МИР', 0)}
+- РОССИЯ: {categories_count.get('РОССИЯ', 0)}
+- СВО: {categories_count.get('СВО', 0)}
+- СТАВРОПОЛЬЕ: {categories_count.get('СТАВРОПОЛЬЕ', 0)}
 
 Угрозы и риски для РФ:
-- Информационные угрозы: зафиксированы противоречия в западных источниках
+- Информационные угрозы: выявлены противоречия в западных источниках
 - Геополитические риски: напряженность в международных отношениях сохраняется
 - Региональные риски: требуется мониторинг Ставропольского края
 
 Оценка достоверности источников:
-- Российские официальные источники: высокая
-- Российские СМИ: высокая
-- Иностранные источники: требуется верификация
+- Российские официальные источники (ТАСС, РИА, RT): высокая
+- Российские СМИ (Коммерсантъ, МК, КП, Lenta, Вести): высокая
+- Региональные СМИ (Вести Ставрополье): высокая
 
-Прогноз:
+Прогноз развития событий (7-14 суток):
 - Сохранение информационного противостояния
 - Возможна активизация информационных атак
+- Требуется усиление мониторинга региональной повестки
 
 Рекомендации:
 - Усилить мониторинг западных СМИ
 - Проводить верификацию противоречивых данных
+- Обратить внимание на региональную специфику
 """
     return analysis
 
 def main():
-    print("Запуск бота...")
+    print("Запуск бота (только российские источники)...")
     
     if not BOT_TOKEN or not CHAT_ID:
-        print("Ошибка: нет токенов")
+        print("Ошибка: нет токенов Telegram")
         return
     
-    all_news = []
-    stats = {'total': 0, 'rss': 0, 'gnews': 0}
+    all_entries = []
+    categories_count = {'МИР': 0, 'РОССИЯ': 0, 'СВО': 0, 'СТАВРОПОЛЬЕ': 0}
+    index = 0
     
-    # RSS
-    print("Сбор RSS...")
-    for source_name, source_config in RSS_SOURCES.items():
-        articles = fetch_rss_news(source_name, source_config)
-        category = "СТАВРОПОЛЬЕ" if source_name == "Вести Ставрополье" else "РОССИЯ"
+    print("\nСбор новостей из российских RSS-источников...")
+    for source_name, rss_url in RSS_SOURCES.items():
+        print(f"  {source_name}...")
+        articles = fetch_rss_news(source_name, rss_url)
+        
         for article in articles:
-            entry = format_news_entry(article, category)
+            entry = format_news_entry(article, index + 1)
             if entry:
-                all_news.append(entry)
-                stats['total'] += 1
-                stats['rss'] += 1
-                print(f"Добавлено: {article.get('title', '')[:50]}")
+                all_entries.append(entry)
+                index += 1
+                cat = get_category(article.get('title', ''), article.get('description', ''))
+                categories_count[cat] = categories_count.get(cat, 0) + 1
+                print(f"    Добавлено: {article.get('title', '')[:60]}...")
             time.sleep(0.5)
     
-    # GNews
-    print("Сбор GNews...")
-    for cat_name, query in CATEGORIES.items():
-        articles = get_news_from_gnews(query)
-        for article in articles:
-            entry = format_news_entry(article, cat_name)
-            if entry:
-                all_news.append(entry)
-                stats['total'] += 1
-                stats['gnews'] += 1
-                print(f"Добавлено: {article.get('title', '')[:50]}")
-            time.sleep(1)
+    if not all_entries:
+        send_telegram("Нет доступных новостей с полным текстом")
+        return
     
     # Формируем отчет
     today = datetime.now().strftime("%d.%m.%Y")
     report = f"ЕЖЕДНЕВНЫЙ ДОКЛАД\nДата: {today}\n\n"
     
-    for news in all_news:
-        report += news + "\n"
+    for entry in all_entries:
+        report += entry
     
-    report += generate_analysis(stats)
+    report += generate_analysis(len(all_entries), categories_count)
     
     # Отправка
     if len(report) > 4096:
@@ -189,7 +180,7 @@ def main():
     else:
         send_telegram(report)
     
-    print(f"Готово. Новостей: {stats['total']}")
+    print(f"\nГотово. Новостей: {len(all_entries)}")
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -202,7 +193,7 @@ def send_telegram(message):
     try:
         requests.post(url, json=payload, timeout=60)
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"Ошибка отправки: {e}")
 
 if __name__ == "__main__":
     main()
