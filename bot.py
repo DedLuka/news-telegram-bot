@@ -16,15 +16,14 @@ RUSSIAN_SOURCES = [
     'kommersant.ru', 'aif.ru', 'kp.ru', 'rg.ru', 'vz.ru'
 ]
 
-def get_news_by_query(query, max_results=8, prioritize_russian=True):
+def get_news_by_query(query, max_results=5):
     """Получает новости с приоритетом российских источников"""
     url = "https://gnews.io/api/v4/search"
     params = {
         'q': query,
         'lang': 'ru',
         'max': max_results,
-        'apikey': GNEWS_API_KEY,
-        'in': 'title,description'  # Ищем в заголовках и описаниях
+        'apikey': GNEWS_API_KEY
     }
     
     try:
@@ -37,53 +36,69 @@ def get_news_by_query(query, max_results=8, prioritize_russian=True):
         data = response.json()
         articles = data.get('articles', [])
         
-        if prioritize_russian:
-            # Сортируем: сначала российские источники
-            articles.sort(key=lambda x: any(src in x.get('source', {}).get('url', '').lower() for src in RUSSIAN_SOURCES), reverse=True)
+        # Сортируем: сначала российские источники
+        articles.sort(key=lambda x: any(src in x.get('source', {}).get('url', '').lower() for src in RUSSIAN_SOURCES), reverse=True)
         
         print(f"✅ Получено {len(articles)} новостей по запросу '{query}'")
-        return articles[:5]  # Возвращаем 5 лучших
+        return articles[:5]
         
     except Exception as e:
         print(f"❌ Ошибка при получении новостей: {e}")
         return []
 
-def get_full_article(url):
-    """Парсит полный текст статьи, возвращает текст или None"""
-    try:
-        print(f"📖 Парсинг статьи: {url[:80]}...")
-        article = Article(url, language='ru')
-        article.download()
-        time.sleep(1.5)  # Задержка для уважения серверов
-        article.parse()
-        
-        text = article.text
-        words = text.split()
-        
-        if len(words) >= 100:
-            return text
-        else:
-            print(f"⚠️ Малый объем текста: {len(words)} слов, пропускаем")
-            return None
-        
-    except Exception as e:
-        print(f"❌ Ошибка парсинга {url}: {e}")
-        return None
-
-def check_contradiction(title, description, query):
-    """Проверяет, есть ли противоречие с официальными источниками"""
-    # Простая эвристика: если новость содержит слова-маркеры противоречия
-    contradiction_keywords = ['опровергает', 'опровержение', 'ложь', 'фейк', 'не соответствует', 'дезинформация', 'западные сми утверждают']
-    text = (title + " " + description).lower()
+def get_article_content(article):
+    """Пытается получить полный текст, если нет — возвращает описание"""
+    url = article.get('url', '')
+    title = article.get('title', '')
+    description = article.get('description', '')
+    source = article.get('source', {}).get('name', '')
     
+    print(f"📖 Обработка: {title[:60]}...")
+    
+    # Пытаемся распарсить полный текст
+    try:
+        news_article = Article(url, language='ru')
+        news_article.download()
+        time.sleep(1)
+        news_article.parse()
+        
+        full_text = news_article.text
+        words = full_text.split()
+        
+        if len(words) >= 50:  # Хотя бы 50 слов
+            print(f"   ✅ Получен полный текст ({len(words)} слов)")
+            return full_text, "полный текст"
+        else:
+            print(f"   ⚠️ Полный текст мал ({len(words)} слов), использую описание")
+            return description or title, "краткое описание"
+            
+    except Exception as e:
+        print(f"   ⚠️ Не удалось получить полный текст: {e}")
+        # Возвращаем описание или заголовок
+        return description or title, "краткое описание (парсинг недоступен)"
+
+def check_contradiction(title, description, full_text):
+    """Проверяет, есть ли противоречие с официальными источниками"""
+    contradiction_keywords = ['опровергает', 'опровержение', 'ложь', 'фейк', 'не соответствует', 'дезинформация']
+    western_indicators = ['bbc', 'cnn', 'reuters', 'nytimes', 'wsj', 'dw', 'западные сми']
+    
+    text = (title + " " + description + " " + (full_text[:500] if full_text else "")).lower()
+    
+    # Проверяем маркеры противоречия
     for kw in contradiction_keywords:
         if kw in text:
-            return f"\n⚠️ *Имеются противоречащие данные в западных источниках:* {kw} (требуется дополнительная верификация)"
+            return f"\n⚠️ *Имеются противоречащие данные:* {kw} (требуется дополнительная верификация)"
+    
+    # Проверяем, западный ли источник
+    source_url = article.get('source', {}).get('url', '').lower()
+    for w in western_indicators:
+        if w in source_url or w in text:
+            return f"\n⚠️ *Информация из западного источника:* требует верификации по российским официальным каналам"
     
     return ""
 
 def format_news_entry(article, category_name, index):
-    """Форматирует одну новость в официально-деловом стиле"""
+    """Форматирует одну новость"""
     title = article.get('title', 'Без названия')
     url = article.get('url', '')
     source = article.get('source', {}).get('name', 'Неизвестное агентство')
@@ -91,7 +106,7 @@ def format_news_entry(article, category_name, index):
     description = article.get('description', '')
     published_raw = article.get('publishedAt', '')
     
-    # Конвертируем время в МСК (UTC+3)
+    # Конвертируем время в МСК
     if published_raw:
         try:
             pub_utc = datetime.fromisoformat(published_raw.replace('Z', '+00:00'))
@@ -104,19 +119,23 @@ def format_news_entry(article, category_name, index):
     
     # Определяем приоритет источника
     is_russian = any(src in source_url.lower() for src in RUSSIAN_SOURCES)
-    source_priority = "🇷🇺 Официальный источник" if is_russian else "🌍 Иностранный источник"
+    source_priority = "🇷🇺 Официальный/Российский источник" if is_russian else "🌍 Иностранный источник"
     
-    # Получаем полный текст
-    full_text = get_full_article(url)
-    
-    # Если не удалось получить полный текст — пропускаем новость
-    if not full_text:
-        return None
+    # Получаем контент
+    content, content_type = get_article_content(article)
     
     # Проверяем противоречия
-    contradiction_note = check_contradiction(title, description, category_name)
+    contradiction_note = check_contradiction(title, description, content)
     
-    # Форматируем новость
+    # Добавляем пометку о типе контента
+    content_note = ""
+    if content_type != "полный текст":
+        content_note = f"\n📌 *Примечание:* представлен {content_type}. Полный текст статьи недоступен для парсинга."
+    
+    # Обрезаем, если слишком длинно
+    if len(content) > 2000:
+        content = content[:2000] + "..."
+    
     news_block = f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 **{category_name} | Новость №{index}**
@@ -124,7 +143,8 @@ def format_news_entry(article, category_name, index):
 **Заголовок:** {title}
 
 **Содержание:**
-{full_text[:2000]}{"..." if len(full_text) > 2000 else ""}
+{content}
+{content_note}
 
 **Источник:** {source} ({source_priority})
 **Время публикации (МСК):** {published_time}
@@ -134,90 +154,91 @@ def format_news_entry(article, category_name, index):
 """
     return news_block
 
-def generate_analysis(all_articles):
-    """Генерирует аналитический вывод для высшего военного руководства"""
+def generate_analysis(all_articles, stats):
+    """Генерирует аналитический вывод"""
     
-    analysis = """
+    analysis = f"""
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                         АНАЛИТИЧЕСКАЯ СВОДКА                                 ║
-║                      (для служебного пользования)                            ║
+║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
+
+**Статистика обработки:**
+- Всего обработано новостей: {stats['total']}
+- С полным текстом: {stats['full']}
+- С кратким описанием: {stats['short']}
 
 **1. Оценка информационной обстановки:**
 
-На основе анализа новостных материалов за последние 24 часа установлено:
-- Преобладание официальных российских источников в информационном поле
-- Высокая степень согласованности между официальными заявлениями
-- Наличие противоречивых данных в зарубежных медиа-ресурсах
+На основе анализа доступных новостных материалов за последние 24 часа установлено:
+- Информационное поле характеризуется высокой степенью противоречивости
+- Преимущество отдается российским официальным источникам при их наличии
+- Зафиксированы попытки распространения недостоверной информации в западных СМИ
 
 **2. Угрозы и риски для РФ:**
 
-• **Информационные угрозы:** фиксируются попытки распространения недостоверных сведений в западных СМИ, направленные на дискредитацию действий ВС РФ.
-• **Геополитические риски:** усиление антироссийской риторики в натовских странах.
-• **Региональные риски:** (на основе новостей по Ставропольскому краю) — требуется усиление контроля за миграционными процессами и профилактика террористических угроз.
+• **Информационные угрозы:** активное распространение противоречивых данных в западных медиа, направленных на дискредитацию действий ВС РФ.
+• **Геополитические риски:** сохранение напряженности в отношениях с недружественными государствами.
+• **Региональные риски:** требуется усиление мониторинга ситуации в Ставропольском крае в части безопасности.
 
 **3. Оценка достоверности источников:**
 
 | Категория источников | Оценка достоверности | Примечание |
 |---------------------|---------------------|------------|
-| Официальные российские (mil.ru, МО РФ) | **Высокая** | Информация соответствует официальной позиции |
+| Официальные российские (mil.ru, МО РФ) | **Высокая** | Информация требует минимальной верификации |
 | Российские СМИ (ТАСС, РИА, Известия) | **Высокая** | Данные согласованы с официальными источниками |
-| Западные СМИ | **Средняя** | Требуется верификация, выявлены противоречия |
+| Иностранные источники | **Средняя/Низкая** | Требуется обязательная верификация |
 
 **4. Прогноз развития событий (на 7-14 суток):**
 
 На основе анализа текущей информационной повестки прогнозируется:
 - Сохранение высокого уровня информационного противостояния
-- Возможная активизация противника в информационном пространстве
-- Необходимость усиления работы с региональными СМИ в Ставропольском крае
+- Возможная активизация информационных атак со стороны противника
+- Необходимость усиления работы с региональными СМИ
 
 **5. Рекомендации:**
-1. Усилить мониторинг западных источников информации
-2. Провести дополнительную проверку материалов, содержащих противоречия
-3. Обратить внимание на региональную специфику Ставропольского края
+1. Усилить мониторинг иностранных источников информации
+2. Проводить дополнительную верификацию материалов из западных СМИ
+3. Обратить внимание на региональную специфику в информационной работе
 
-*Данный аналитический обзор подготовлен автоматически на основе агрегации данных из 60 000+ мировых источников. Рекомендуется проведение дополнительной верификации критически важной информации уполномоченными органами.*
+*Данный аналитический обзор подготовлен автоматически. Рекомендуется проведение дополнительной верификации критически важной информации.*
 """
     return analysis
 
 def main():
-    print("🚀 Запуск аналитического новостного бота для высшего военного руководства...")
+    print("🚀 Запуск аналитического новостного бота...")
     
     if not BOT_TOKEN or not CHAT_ID or not GNEWS_API_KEY:
         print("❌ Ошибка: не заданы секреты")
         send_telegram("⚠️ *Ошибка конфигурации*: проверьте секреты")
         return
     
-    # Категории запросов с приоритетом российских источников
+    # Категории запросов
     categories = {
-        "🌍 МЕЖДУНАРОДНАЯ ОБСТАНОВКА": "world OR international OR глобальный OR международные отношения",
-        "🇷🇺 РОССИЙСКАЯ ФЕДЕРАЦИЯ": "Russia OR российская федерация OR Кремль OR правительство РФ",
-        "⚔️ СПЕЦИАЛЬНАЯ ВОЕННАЯ ОПЕРАЦИЯ": "специальная военная операция OR Донбасс OR ZOV OR Минобороны РФ",
-        "🏛️ СТАВРОПОЛЬСКИЙ КРАЙ": "Ставропольский край OR Ставрополье OR безопасность Ставрополье OR закон Ставрополье"
+        "🌍 МЕЖДУНАРОДНАЯ ОБСТАНОВКА": "world OR international",
+        "🇷🇺 РОССИЙСКАЯ ФЕДЕРАЦИЯ": "Russia OR российская федерация",
+        "⚔️ СПЕЦИАЛЬНАЯ ВОЕННАЯ ОПЕРАЦИЯ": "специальная военная операция OR Донбасс",
+        "🏛️ СТАВРОПОЛЬСКИЙ КРАЙ": "Ставропольский край OR Ставрополье"
     }
     
-    all_articles = {}
-    successful_news = 0
-    failed_news = 0
+    all_news = []
+    stats = {'total': 0, 'full': 0, 'short': 0}
     
     # Собираем новости по каждой категории
     for category, query in categories.items():
         print(f"\n🔍 Сбор новостей: {category}")
-        articles = get_news_by_query(query, max_results=8)
-        all_articles[category] = []
+        articles = get_news_by_query(query, max_results=5)
         
-        # Формируем новости, пропуская те, что не парсятся
         for idx, article in enumerate(articles, 1):
             news_entry = format_news_entry(article, category, idx)
             if news_entry:
-                all_articles[category].append(news_entry)
-                successful_news += 1
-                print(f"✅ Новость {idx} обработана успешно")
+                all_news.append(news_entry)
+                stats['total'] += 1
+                print(f"   ✅ Новость {idx} добавлена")
             else:
-                failed_news += 1
-                print(f"⚠️ Новость {idx} пропущена (не удалось получить полный текст)")
+                print(f"   ⚠️ Новость {idx} пропущена")
             
-            time.sleep(2)  # Задержка между обработкой новостей
+            time.sleep(1.5)  # Задержка
     
     # Формируем отчет
     today = datetime.now().strftime("%d.%B.%Y")
@@ -225,40 +246,31 @@ def main():
     
     report = f"""
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║         ЕЖЕДНЕВНЫЙ АНАЛИТИЧЕСКИЙ ДОКЛАД ДЛЯ ВЫСШЕГО ВОЕННОГО РУКОВОДСТВА     ║
+║         ЕЖЕДНЕВНЫЙ АНАЛИТИЧЕСКИЙ ДОКЛАД                                      ║
 ║                        {today} | {current_time} МСК                          ║
-║              НЕ СЕКРЕТНО, информация из открытых источников                  ║
+║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
-
-**Статистика обработки:** Успешно обработано {successful_news} новостей, пропущено {failed_news} (недостаточный объем текста)
 
 """
     
-    # Добавляем новости по категориям
-    for category, news_list in all_articles.items():
-        report += f"\n\n## {category}\n"
-        
-        if not news_list:
-            report += f"\n⚠️ *По данной категории не найдено новостей с полным текстом*\n"
-            continue
-        
-        for news in news_list:
-            report += news
+    # Добавляем новости
+    for news in all_news:
+        report += news
     
-    # Добавляем аналитический вывод
-    report += generate_analysis(all_articles)
+    # Добавляем аналитику
+    report += generate_analysis(all_news, stats)
     
-    # Отправляем в Telegram с разбиением на части
+    # Отправляем в Telegram
     if len(report) > 4096:
         parts = [report[i:i+4096] for i in range(0, len(report), 4096)]
         for i, part in enumerate(parts):
             send_telegram(part)
             if i == 0 and len(parts) > 1:
-                send_telegram("📄 *Продолжение аналитического доклада...*")
+                send_telegram("📄 *Продолжение доклада...*")
     else:
         send_telegram(report)
     
-    print(f"\n✅ Аналитический отчет отправлен! Успешно: {successful_news}, Пропущено: {failed_news}")
+    print(f"\n✅ Отчет отправлен! Обработано новостей: {stats['total']}")
 
 def send_telegram(message):
     """Отправляет сообщение в Telegram"""
@@ -273,13 +285,13 @@ def send_telegram(message):
     try:
         response = requests.post(url, json=payload, timeout=60)
         if response.status_code == 200:
-            print("✅ Часть отчета отправлена")
+            print("   ✅ Часть отчета отправлена")
             return True
         else:
-            print(f"❌ Ошибка отправки: {response.text}")
+            print(f"   ❌ Ошибка: {response.text[:100]}")
             return False
     except Exception as e:
-        print(f"❌ Ошибка при отправке: {e}")
+        print(f"   ❌ Ошибка: {e}")
         return False
 
 if __name__ == "__main__":
