@@ -2,7 +2,10 @@ name: Daily News Report
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    # Запуск в 21:00 МСК = 18:00 UTC
+    - cron: '0 18 * * *'
+    # Запуск в 05:00 МСК = 02:00 UTC
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:
