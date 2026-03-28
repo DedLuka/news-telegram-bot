@@ -8,6 +8,23 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 
+# Тестовая отправка при запуске
+def test_telegram():
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': CHAT_ID,
+        'text': "🔧 Бот запущен и работает",
+        'parse_mode': 'Markdown'
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        print(f"Тест отправки: {r.status_code} - {r.text[:100]}")
+    except Exception as e:
+        print(f"Ошибка теста: {e}")
+
+# В main() после проверки токенов добавьте:
+test_telegram()
+
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
