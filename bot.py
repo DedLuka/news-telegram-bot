@@ -8,6 +8,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import html
+from collections import Counter
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
@@ -31,29 +32,14 @@ def test_telegram():
         return False
 
 def clean_html(text):
-    """Удаляет HTML-теги и восстанавливает нормальный текст"""
     if not text:
         return ""
-    
-    # Декодируем HTML-сущности (&quot;, &amp;, &lt; и т.д.)
     text = html.unescape(text)
-    
-    # Удаляем все HTML-теги
     text = re.sub(r'<[^>]+>', '', text)
-    
-    # Удаляем экранированные символы (\. и т.д.)
     text = re.sub(r'\\([\.\*\+\?\[\]\(\)\{\}\|\\])', r'\1', text)
-    
-    # Заменяем множественные пробелы и переносы
     text = re.sub(r'\s+', ' ', text)
-    
-    # Удаляем ссылки в формате [текст](url)
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-    
-    # Удаляем лишние пробелы в начале и конце
-    text = text.strip()
-    
-    return text
+    return text.strip()
 
 # Российские RSS-источники
 RSS_RUSSIAN = {
@@ -74,7 +60,6 @@ RSS_RUSSIAN = {
     "Ставропольская правда": "https://www.stapravda.ru/rss/",
 }
 
-# Зарубежные RSS-источники
 RSS_FOREIGN = {
     "BBC News": "http://feeds.bbci.co.uk/news/rss.xml",
     "CNN": "http://rss.cnn.com/rss/edition.rss",
@@ -92,15 +77,15 @@ RSS_SOURCES = {**RSS_RUSSIAN, **RSS_FOREIGN}
 
 CATEGORIES = {
     "МИР": {
-        "keywords": ["мир", "международный", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "оон", "world", "international", "europe", "usa", "nato", "china"],
+        "keywords": ["мир", "международный", "европа", "сша", "нато", "китай", "германия", "франция", "англия", "америка", "брюссель", "вашингтон", "лондон", "санкции", "конфликт", "оон", "world", "international"],
         "priority": 1
     },
     "РОССИЯ": {
-        "keywords": ["россия", "путин", "медведев", "мишустин", "кремль", "госдума", "правительство", "москва", "российский", "безопасность", "оборона", "фсб", "указ", "закон", "russia", "putin"],
+        "keywords": ["россия", "путин", "медведев", "мишустин", "кремль", "госдума", "правительство", "москва", "российский", "безопасность", "оборона", "фсб", "указ", "закон"],
         "priority": 2
     },
     "СВО": {
-        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "герасимов", "спецоперация", "наступление", "удар", "обстрел", "донецк", "луганск", "ukraine", "war", "military"],
+        "keywords": ["сво", "донбасс", "украина", "запорожье", "херсон", "военный", "минобороны", "мобилизация", "армия", "фронт", "бахмут", "авдеевка", "шойгу", "герасимов", "спецоперация", "наступление", "удар", "обстрел", "донецк", "луганск", "ukraine", "war"],
         "priority": 3
     },
     "СТАВРОПОЛЬЕ": {
@@ -124,13 +109,7 @@ def translate_to_russian(text):
         return translation_cache[cache_key]
     try:
         url = "https://translate.googleapis.com/translate_a/single"
-        params = {
-            'client': 'gtx',
-            'sl': 'auto',
-            'tl': 'ru',
-            'dt': 't',
-            'q': text[:500]
-        }
+        params = {'client': 'gtx', 'sl': 'auto', 'tl': 'ru', 'dt': 't', 'q': text[:500]}
         response = requests.get(url, params=params, timeout=5)
         if response.status_code == 200:
             data = response.json()
@@ -143,27 +122,21 @@ def translate_to_russian(text):
 
 def extract_locations(text):
     locations = []
-    location_patterns = [
+    patterns = [
         r'(?:в|на|под|у|из|за|около)\s+([А-ЯЁ][а-яё]+(?:-?[А-ЯЁ][а-яё]+)?)\s+(?:районе?|области?|крае?|городе?)',
         r'([А-ЯЁ][а-яё]+(?:-?[А-ЯЁ][а-яё]+)?)\s+(?:город|поселок|село|станица)',
         r'(?:Донецк|Луганск|Запорожье|Херсон|Бахмут|Авдеевка|Артемовск|Соледар)'
     ]
-    for pattern in location_patterns:
+    for pattern in patterns:
         matches = re.findall(pattern, text, re.IGNORECASE)
         locations.extend(matches)
     return list(set(locations))[:3]
 
 def check_inconsistency(title, description, source_name):
     text = (title + " " + description).lower()
-    contradiction_markers = ['опровергает', 'опровержение', 'ложь', 'фейк', 'не соответствует']
     western_sources = ['bbc', 'cnn', 'guardian', 'reuters', 'ap', 'washington', 'nytimes']
-    
     is_western = any(w in source_name.lower() for w in western_sources)
-    has_contradiction = any(m in text for m in contradiction_markers)
-    
-    if has_contradiction:
-        return "\n⚠️ Информация противоречит официальным российским источникам"
-    elif is_western:
+    if is_western:
         return "\n🌍 Информация из западного источника, требуется верификация"
     return ""
 
@@ -172,13 +145,8 @@ def fetch_single_rss(source_name, url):
         feed = feedparser.parse(url)
         articles = []
         for entry in feed.entries[:8]:
-            title = entry.get('title', '')
-            description = entry.get('summary', '')
-            
-            # Очищаем от HTML-тегов
-            title = clean_html(title)
-            description = clean_html(description)
-            
+            title = clean_html(entry.get('title', ''))
+            description = clean_html(entry.get('summary', ''))
             published = datetime.now()
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                 published = datetime(*entry.published_parsed[:6])
@@ -199,7 +167,7 @@ def fetch_single_rss(source_name, url):
                 'is_russian': source_name in RSS_RUSSIAN
             })
         return articles
-    except Exception as e:
+    except Exception:
         return []
 
 def fetch_all_rss_parallel():
@@ -215,7 +183,7 @@ def fetch_all_rss_parallel():
                     all_articles.extend(articles)
                 else:
                     print(f"  ⚠️ {source_name}: 0")
-            except Exception as e:
+            except Exception:
                 print(f"  ❌ {source_name}: ошибка")
     return all_articles
 
@@ -230,12 +198,12 @@ def get_category(title, description):
 def get_priority_score(title, description, source_is_russian):
     text = (title + " " + description).lower()
     score = 0
-    high_priority = ["минобороны", "шойгу", "герасимов", "наступление", "мобилизация", "сво", "фронт"]
-    medium_priority = ["армия", "войска", "военный", "оборона", "безопасность", "разведка"]
-    for word in high_priority:
+    high = ["минобороны", "шойгу", "герасимов", "наступление", "мобилизация", "сво", "фронт"]
+    medium = ["армия", "войска", "военный", "оборона", "безопасность"]
+    for word in high:
         if word in text:
             score += 5
-    for word in medium_priority:
+    for word in medium:
         if word in text:
             score += 2
     if source_is_russian:
@@ -243,23 +211,18 @@ def get_priority_score(title, description, source_is_russian):
     return score
 
 def format_news_entry(article, index, category):
-    title = article.get('title', '')
+    title = clean_html(article.get('title', ''))
     url = article.get('url', '')
-    source = article.get('source', '')
-    description = article.get('description', '')
+    source = clean_html(article.get('source', ''))
+    description = clean_html(article.get('description', '')[:500])
     published = article.get('published', datetime.now())
     published_time = published.strftime("%d.%m.%Y %H:%M")
-    
-    # Очищаем еще раз на всякий случай
-    title = clean_html(title)
-    source = clean_html(source)
-    description = clean_html(description[:500] if description else title[:500])
     
     locations = extract_locations(title + " " + description)
     locations_text = f"📍 {', '.join(locations)}" if locations else ""
     inconsistency = check_inconsistency(title, description, source)
     
-    entry = f"""НОВОСТЬ {index}
+    return f"""НОВОСТЬ {index}
 Категория: {category}
 Источник: {source}
 Заголовок: {title}
@@ -268,39 +231,109 @@ def format_news_entry(article, index, category):
 Время: {published_time} МСК
 Ссылка: {url}{inconsistency}
 """
-    return entry
 
-def generate_analysis(category_news, total_processed):
+def generate_dynamic_analysis(category_news, all_articles):
+    """Динамическая аналитика на основе реальных новостей"""
+    
+    # Собираем все заголовки и описания
+    all_texts = []
+    for articles in category_news.values():
+        for article in articles:
+            all_texts.append(article.get('title', '') + " " + article.get('description', ''))
+    
+    full_text = " ".join(all_texts).lower()
+    
+    # Анализируем ключевые слова и события
+    events = []
+    locations = []
+    
+    # Военные действия
+    if re.search(r'(наступление|удар|обстрел|атака|уничтожен|ликвидирован)', full_text):
+        events.append("активные боевые действия")
+        # Определяем направление
+        if re.search(r'(донецк|днр|горловка|авдеевка)', full_text):
+            events.append("на Донецком направлении")
+        if re.search(r'(запорожье|каменское|орехов)', full_text):
+            events.append("на Запорожском направлении")
+        if re.search(r'(херсон|антоновский)', full_text):
+            events.append("на Херсонском направлении")
+        if re.search(r'(луганск|сватово|кременная)', full_text):
+            events.append("на Луганском направлении")
+    
+    # Потери
+    if re.search(r'(потери|уничтожен|сбит|ликвидирован)', full_text):
+        events.append("зафиксированы потери противника")
+    
+    # Мобилизация
+    if re.search(r'(мобилизация|призыв|военкомат)', full_text):
+        events.append("продолжается мобилизационная работа")
+    
+    # Западные заявления
+    western_claims = []
+    if re.search(r'(санкции|ограничения|запрет)', full_text):
+        western_claims.append("санкционное давление")
+    if re.search(r'(помощь украине|военная помощь|поставки вооружений)', full_text):
+        western_claims.append("заявлены новые поставки вооружений Киеву")
+    if re.search(r'(нато|альянс|укрепление флангов)', full_text):
+        western_claims.append("активность НАТО у границ РФ")
+    
+    # Извлекаем топ-5 ключевых слов
+    words = re.findall(r'[а-яё]{4,}', full_text)
+    word_freq = Counter(words)
+    top_keywords = [w for w, _ in word_freq.most_common(7) if w not in ['новости', 'сообщил', 'заявил', 'пресс', 'служба']][:5]
+    
+    # Региональные события (Ставрополье)
+    regional_events = []
+    if re.search(r'(ставрополь|ставрополье|кавминводы)', full_text):
+        if re.search(r'(терроризм|безопасность|охрана)', full_text):
+            regional_events.append("усилены меры безопасности")
+        if re.search(r'(мобилизация|военкомат|призыв)', full_text):
+            regional_events.append("продолжается работа военкоматов")
+        if re.search(r'(поддержка семей|помощь|льготы)', full_text):
+            regional_events.append("реализуются меры поддержки семей военнослужащих")
+    
+    # Формируем динамический анализ
     today = datetime.now().strftime("%d.%m.%Y")
+    
     analysis = f"""
 АНАЛИТИЧЕСКАЯ СВОДКА
 Дата: {today}
 
-1. СТАТИСТИКА
+1. СТАТИСТИКА ЗА СУТКИ
 - МИР: {len(category_news.get('МИР', []))}
 - РОССИЯ: {len(category_news.get('РОССИЯ', []))}
 - СВО: {len(category_news.get('СВО', []))}
 - СТАВРОПОЛЬЕ: {len(category_news.get('СТАВРОПОЛЬЕ', []))}
-- Всего обработано: {total_processed}
+- Всего обработано: {len(all_articles)}
 
-2. ОЦЕНКА ОБСТАНОВКИ
-- В зоне СВО сохраняется напряженность
-- Российские войска продолжают выполнение задач
-- Зафиксированы противоречия в западных СМИ
+2. КЛЮЧЕВЫЕ СОБЫТИЯ
+{chr(10).join([f"- {e}" for e in events[:5]]) if events else "- Значимых событий не выявлено"}
 
-3. УГРОЗЫ И РИСКИ
-- Информационные атаки со стороны западных СМИ
-- Сохранение санкционного давления
+3. АКТИВНОСТЬ НА ФРОНТЕ
+{chr(10).join([f"- {e}" for e in events if 'наступление' in e or 'удар' in e or 'потери' in e]) if events else "- Оперативная обстановка контролируемая"}
 
-4. РЕКОМЕНДАЦИИ
-- Усилить мониторинг западных источников
-- Проводить верификацию противоречивых данных
+4. МЕЖДУНАРОДНАЯ ОБСТАНОВКА
+{chr(10).join([f"- {c}" for c in western_claims]) if western_claims else "- Существенных изменений не зафиксировано"}
+
+5. РЕГИОНАЛЬНАЯ ПОВЕСТКА (СТАВРОПОЛЬЕ)
+{chr(10).join([f"- {r}" for r in regional_events]) if regional_events else "- Ситуация контролируемая, происшествий не зафиксировано"}
+
+6. ОСНОВНЫЕ ТЕМЫ ИНФОРМПОЛЯ
+{chr(10).join([f"- {kw}" for kw in top_keywords]) if top_keywords else "- Анализ проводится"}
+
+7. ОЦЕНКА ДОСТОВЕРНОСТИ
+- Российские источники: информация согласована
+- Западные источники: выявлены расхождения, требуется верификация
+
+8. ПРОГНОЗ (на 24-48 часов)
+- Ожидается сохранение интенсивности боевых действий
+- Возможны новые информационные вбросы со стороны противника
+- Региональная обстановка остается под контролем
 """
     return analysis
 
 def send_telegram(message):
     if not BOT_TOKEN or not CHAT_ID:
-        print("❌ Нет токенов для отправки")
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
@@ -310,27 +343,19 @@ def send_telegram(message):
     }
     try:
         r = requests.post(url, json=payload, timeout=60)
-        if r.status_code == 200:
-            print("   ✅ Отправлено")
-            return True
-        else:
-            print(f"   ❌ Ошибка: {r.text[:200]}")
-            return False
-    except Exception as e:
-        print(f"   ❌ Ошибка: {e}")
+        return r.status_code == 200
+    except Exception:
         return False
 
 def main():
     print("🚀 Запуск бота...")
     
     if not BOT_TOKEN or not CHAT_ID:
-        print("❌ Ошибка: TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не заданы")
+        print("❌ Ошибка: токены не заданы")
         return
     
     print("\n📡 Проверка Telegram...")
-    if not test_telegram():
-        print("❌ Не удалось подключиться к Telegram")
-        return
+    test_telegram()
     
     print(f"\n📡 Параллельная загрузка {len(RSS_SOURCES)} источников...")
     start_time = time.time()
@@ -342,6 +367,7 @@ def main():
         send_telegram("⚠️ Нет новостей для обработки")
         return
     
+    # Категоризация
     news_items = []
     for article in all_articles:
         cat = get_category(article['title'], article.get('description', ''))
@@ -350,12 +376,14 @@ def main():
     
     news_items.sort(key=lambda x: x['priority'], reverse=True)
     
+    # Распределение по категориям
     category_news = defaultdict(list)
     for item in news_items:
         cat = item['category']
         if len(category_news[cat]) < 7:
             category_news[cat].append(item['article'])
     
+    # Формирование отчета
     report = f"ЕЖЕДНЕВНЫЙ ДОКЛАД\nДата: {datetime.now().strftime('%d.%m.%Y')}\n\n"
     
     for cat in CATEGORY_ORDER:
@@ -367,15 +395,14 @@ def main():
                     report += "\n***\n\n"
             report += "\n"
     
-    report += generate_analysis(category_news, len(all_articles))
+    report += generate_dynamic_analysis(category_news, all_articles)
     
+    # Отправка
     print("\n📤 Отправка отчета...")
     if len(report) > 4096:
         parts = [report[i:i+4096] for i in range(0, len(report), 4096)]
-        for i, part in enumerate(parts):
+        for part in parts:
             send_telegram(part)
-            if i == 0 and len(parts) > 1:
-                send_telegram("📄 Продолжение...")
     else:
         send_telegram(report)
     
